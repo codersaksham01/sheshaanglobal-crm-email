@@ -96,10 +96,37 @@ def today(): return date.today().isoformat()
 def now(): return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 def valid_email(e): return bool(clean(e) and EMAIL_RE.match(clean(e).lower()))
 def norm_header(h): return re.sub(r"[^a-z0-9]+"," ",str(h).lower()).strip()
-import psycopg2
-from psycopg2.extras import DictCursor
+import pg8000
+from urllib.parse import urlparse
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:sheshaanglobal@db.ttigvtswchtotyshikcv.supabase.co:5432/postgres")
+
+def parse_pg_url(url):
+    parsed = urlparse(url)
+    return {
+        "user": parsed.username,
+        "password": parsed.password,
+        "host": parsed.hostname,
+        "port": parsed.port or 5432,
+        "database": parsed.path.lstrip('/')
+    }
+
+class RowWrapper:
+    def __init__(self, cols, vals):
+        self.cols = cols
+        self.vals = vals
+        self.map = {col: val for col, val in zip(cols, vals)}
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self.vals[key]
+        return self.map[key]
+
+    def keys(self):
+        return self.cols
+
+    def __iter__(self):
+        return iter(self.vals)
 
 class CursorWrapper:
     def __init__(self, cursor, conn_wrapper):
@@ -140,13 +167,16 @@ class CursorWrapper:
                 self.cursor.execute(sql, params)
             else:
                 self.cursor.execute(sql)
-        except psycopg2.IntegrityError as e:
-            try:
-                self.conn_wrapper.conn.rollback()
-            except Exception:
-                pass
-            import sqlite3
-            raise sqlite3.IntegrityError(str(e))
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "unique" in err_msg or "duplicate" in err_msg or "integrity" in err_msg:
+                try:
+                    self.conn_wrapper.conn.rollback()
+                except Exception:
+                    pass
+                import sqlite3
+                raise sqlite3.IntegrityError(str(e))
+            raise e
 
         if is_insert:
             try:
@@ -157,13 +187,23 @@ class CursorWrapper:
                 pass
         return self
 
+    def _wrap_row(self, row):
+        if row is None:
+            return None
+        if isinstance(row, RowWrapper):
+            return row
+        if not self.cursor.description:
+            return row
+        cols = [desc[0] for desc in self.cursor.description]
+        return RowWrapper(cols, row)
+
     def fetchone(self):
         if self._mock_val is not None:
             val = self._mock_val
             self._mock_val = None
             return val
         try:
-            return self.cursor.fetchone()
+            return self._wrap_row(self.cursor.fetchone())
         except Exception:
             return None
 
@@ -171,9 +211,10 @@ class CursorWrapper:
         if self._mock_val is not None:
             val = [self._mock_val]
             self._mock_val = None
-            return val
+            return [self._wrap_row(v) for v in val]
         try:
-            return self.cursor.fetchall()
+            rows = self.cursor.fetchall()
+            return [self._wrap_row(r) for r in rows]
         except Exception:
             return []
 
@@ -188,7 +229,7 @@ class PostgresConnWrapper:
         self.row_factory = None
 
     def cursor(self):
-        return CursorWrapper(self.conn.cursor(cursor_factory=DictCursor), self)
+        return CursorWrapper(self.conn.cursor(), self)
 
     def execute(self, sql, params=None):
         cur = self.cursor()
@@ -225,8 +266,10 @@ class PostgresConnWrapper:
 
 
 def conn():
-    raw_conn = psycopg2.connect(DATABASE_URL)
+    kwargs = parse_pg_url(DATABASE_URL)
+    raw_conn = pg8000.dbapi.connect(**kwargs)
     return PostgresConnWrapper(raw_conn)
+
 
 
 def default_templates():
