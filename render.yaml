@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: export-import-crm
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python app.py"
+    envVars:
+      - key: PORT
+        value: 5050
+      - key: DATABASE_URL
+        value: postgresql://postgres:sheshaanglobal@db.ttigvtswchtotyshikcv.supabase.co:5432/postgres
+

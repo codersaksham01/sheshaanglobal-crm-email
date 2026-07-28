@@ -1,0 +1,12 @@
+[build]
+  command = "echo 'Building Python Functions'"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/*"
+  to = "/.netlify/functions/crm"
+  status = 200
+  force = true

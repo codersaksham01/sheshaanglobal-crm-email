@@ -1,0 +1,16 @@
+SMART EXPORT CRM V7.2 - OUTLOOK DESKTOP TESTS
+
+- Python syntax compilation passed.
+- ZIP integrity test passed.
+- MAILTO link contains the correct recipient.
+- Subject and message body are safely URL encoded.
+- Line breaks, ampersands, apostrophes and Unicode text are preserved.
+- Buyer template personalization works.
+- Campaign recipient snapshots work.
+- Buyer and campaign buttons use MAILTO directly.
+- No outlook.office.com compose URL remains in app.py.
+- Old /titan-compose and /outlook-compose routes still produce MAILTO drafts.
+- Existing SQLite database filename and schema remain unchanged.
+
+Windows requirement:
+Microsoft Outlook must be assigned as the default MAILTO handler.

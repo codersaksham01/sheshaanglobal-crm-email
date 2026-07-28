@@ -1,0 +1,25 @@
+SMART EXPORT CRM V7.2 - OUTLOOK DESKTOP APP
+
+This version opens the installed Outlook application, not Outlook Web.
+
+START:
+1. Extract the ZIP completely.
+2. Copy your existing export_import_crm.sqlite into this folder if you need old data.
+3. Double-click RUN_OUTLOOK_DESKTOP.bat.
+4. Use http://127.0.0.1:5050
+5. Verify http://127.0.0.1:5050/version says "Outlook Desktop Active".
+
+EXPECTED EMAIL BEHAVIOR:
+- Buttons say "Open Outlook App".
+- Outlook opens a new draft in the installed Windows application.
+- To, Subject and Message are pre-filled.
+- No Outlook website or Titan website is opened.
+- You review the draft and click Send yourself.
+
+IF ANOTHER APP OR WEBSITE OPENS:
+1. Double-click SET_OUTLOOK_AS_DEFAULT.bat.
+2. In Windows Default Apps, search for MAILTO.
+3. Assign MAILTO to Microsoft Outlook.
+4. Restart the CRM and browser.
+
+The old Titan app can remain visible on port 5000. Use port 5050 for this version.

@@ -1,0 +1,11 @@
+OUTLOOK DESKTOP DROP-IN PATCH
+
+1. Stop the currently running CRM window.
+2. Extract this patch.
+3. Copy every extracted file into your existing CRM folder containing app.py and export_import_crm.sqlite.
+4. Choose Replace files when Windows asks.
+5. Do not delete or replace export_import_crm.sqlite.
+6. Double-click RUN_OUTLOOK_DESKTOP.bat.
+7. Use http://127.0.0.1:5050
+
+If Outlook does not open, run SET_OUTLOOK_AS_DEFAULT.bat and assign MAILTO to Microsoft Outlook.
