@@ -266,8 +266,15 @@ class PostgresConnWrapper:
 
 
 def conn():
+    import ssl
     kwargs = parse_pg_url(DATABASE_URL)
-    raw_conn = pg8000.dbapi.connect(**kwargs)
+    try:
+        ssl_context = ssl.create_default_context()
+        # Supabase requires SSL, so we pass the context
+        raw_conn = pg8000.dbapi.connect(**kwargs, ssl_context=ssl_context)
+    except Exception:
+        # Fallback to non-SSL if SSL is not configured/supported locally
+        raw_conn = pg8000.dbapi.connect(**kwargs)
     return PostgresConnWrapper(raw_conn)
 
 
