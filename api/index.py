@@ -35,11 +35,13 @@ def parse_multipart_payload(content_type, body_bytes):
 
 def application(environ, start_response):
     # 1. Extract Path, Method and Query Parameters
-    path = environ.get('PATH_INFO', '/')
+    path = environ.get('PATH_INFO', '/') or '/'
     if path == '/api/index.py':
         path = '/'
     elif path.startswith('/api/index.py/'):
         path = path[len('/api/index.py'):]
+    if path != '/' and path.endswith('/'):
+        path = path.rstrip('/')
     method = environ.get('REQUEST_METHOD', 'GET').upper()
     query_string = environ.get('QUERY_STRING', '')
     params = parse_qs(query_string)
@@ -96,6 +98,8 @@ def application(environ, start_response):
 
     def session_token(username):
         secret = os.environ.get('CRM_SESSION_SECRET') or expected_credentials()[1]
+        if not secret:
+            return ''
         return hmac.new(secret.encode('utf-8'), username.encode('utf-8'), hashlib.sha256).hexdigest()
 
     def cookie_value(name):
@@ -108,23 +112,34 @@ def application(environ, start_response):
 
     def is_authenticated():
         username, password = expected_credentials()
+        if not username or not password:
+            return False
         auth_header = environ.get('HTTP_AUTHORIZATION', '')
         expected = "Basic " + base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("utf-8")
         if hmac.compare_digest(auth_header, expected):
             return True
         return hmac.compare_digest(cookie_value('crm_session'), session_token(username))
 
+    # Helper to check if HTTPS
+    is_secure_request = (
+        environ.get('wsgi.url_scheme', 'http') == 'https' or
+        environ.get('HTTP_X_FORWARDED_PROTO', 'http') == 'https'
+    )
+    secure_attr = "; Secure" if is_secure_request else ""
+
     if path == '/login' and method == 'GET':
         return html_response(login_page())
     if path == '/login' and method == 'POST':
         data = form_dict(body_bytes)
         username, password = expected_credentials()
+        if not username or not password:
+            return html_response(login_page('Login is not configured. Add CRM_USERNAME and CRM_PASSWORD in Vercel Environment Variables.'), '500 Internal Server Error')
         if hmac.compare_digest(data.get('email', ''), username) and hmac.compare_digest(data.get('password', ''), password):
-            cookie = f"crm_session={session_token(username)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800"
+            cookie = f"crm_session={session_token(username)}; Path=/; HttpOnly{secure_attr}; SameSite=Lax; Max-Age=604800"
             return redirect_response('/', [('Set-Cookie', cookie)])
         return html_response(login_page('Invalid email or password.'), '401 Unauthorized')
     if path == '/logout':
-        return redirect_response('/login', [('Set-Cookie', 'crm_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0')])
+        return redirect_response('/login', [('Set-Cookie', f'crm_session=; Path=/; HttpOnly{secure_attr}; SameSite=Lax; Max-Age=0')])
 
     if not is_authenticated():
         return redirect_response('/login?next=' + quote(path or '/'))

@@ -97,7 +97,6 @@ def today(): return date.today().isoformat()
 def now(): return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 def valid_email(e): return bool(clean(e) and EMAIL_RE.match(clean(e).lower()))
 def norm_header(h): return re.sub(r"[^a-z0-9]+"," ",str(h).lower()).strip()
-import pg8000
 from urllib.parse import urlparse
 
 DATABASE_URL = (
@@ -272,10 +271,91 @@ class PostgresConnWrapper:
             pass
 
 
+class SQLiteCursorWrapper:
+    def __init__(self, cursor):
+        self.cursor = cursor
+
+    def execute(self, sql, params=None):
+        if params is not None:
+            self.cursor.execute(sql, params)
+        else:
+            self.cursor.execute(sql)
+        return self
+
+    def _wrap_row(self, row):
+        if row is None:
+            return None
+        if isinstance(row, RowWrapper):
+            return row
+        if not self.cursor.description:
+            return row
+        cols = [desc[0] for desc in self.cursor.description]
+        return RowWrapper(cols, row)
+
+    def fetchone(self):
+        try:
+            return self._wrap_row(self.cursor.fetchone())
+        except Exception:
+            return None
+
+    def fetchall(self):
+        try:
+            rows = self.cursor.fetchall()
+            return [self._wrap_row(r) for r in rows]
+        except Exception:
+            return []
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class SQLiteConnWrapper:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def cursor(self):
+        return SQLiteCursorWrapper(self.conn.cursor())
+
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
+    def commit(self):
+        self.conn.commit()
+
+    def rollback(self):
+        self.conn.rollback()
+
+    def close(self):
+        self.conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+        else:
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+
+
 def conn():
-    import ssl
     if not DATABASE_URL:
-        raise RuntimeError("Database connection is not set. Add DATABASE_URL or POSTGRES_URL in Vercel Environment Variables.")
+        raw_conn = sqlite3.connect(DB_PATH)
+        return SQLiteConnWrapper(raw_conn)
+    import ssl
+    import pg8000
     kwargs = parse_pg_url(DATABASE_URL)
     try:
         ssl_context = ssl.create_default_context()
