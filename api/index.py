@@ -5,7 +5,7 @@ import base64
 import email
 import hmac
 import hashlib
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 # Add root folder to Python path
 sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
@@ -33,9 +33,31 @@ def parse_multipart_payload(content_type, body_bytes):
         pass
     return None, None
 
+def request_path(environ):
+    candidates = [
+        environ.get('REQUEST_URI'),
+        environ.get('RAW_URI'),
+        environ.get('HTTP_X_ORIGINAL_URL'),
+        environ.get('HTTP_X_REWRITE_URL'),
+        environ.get('PATH_INFO'),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = urlsplit(candidate).path or '/'
+        if path == '/api/index.py':
+            continue
+        if path.startswith('/api/index.py/'):
+            path = path[len('/api/index.py'):]
+        if path != '/' and path.endswith('/'):
+            path = path.rstrip('/')
+        return path or '/'
+    return '/'
+
+
 def application(environ, start_response):
     # 1. Extract Path, Method and Query Parameters
-    path = environ.get('PATH_INFO', '/') or '/'
+    path = request_path(environ)
     if path == '/api/index.py':
         path = '/'
     elif path.startswith('/api/index.py/'):
