@@ -1007,6 +1007,31 @@ def parse_backup_table(z, table):
         text=io.TextIOWrapper(f, encoding='utf-8-sig', newline='')
         return [{clean(k):clean(v) for k,v in row.items()} for row in csv.DictReader(text)]
 
+def parse_sqlite_backup_tables(z):
+    dbname=next((n for n in z.namelist() if os.path.basename(n)=='export_import_crm.sqlite'),None)
+    if not dbname:
+        return None
+    tmp=os.path.join(BACKUP_DIR,'live_restore_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'.sqlite')
+    with open(tmp,'wb') as f:
+        f.write(z.read(dbname))
+    parsed={}
+    try:
+        sq=sqlite3.connect(tmp)
+        sq.row_factory=sqlite3.Row
+        for table in RESTORE_TABLES:
+            try:
+                rows=sq.execute(f'SELECT * FROM {table} ORDER BY id').fetchall()
+            except Exception:
+                rows=[]
+            parsed[table]=[{k:row[k] for k in row.keys()} for row in rows]
+        sq.close()
+    finally:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+    return parsed
+
 def restore_live_backup(path):
     if not path or not path.lower().endswith('.zip'):
         return 'Please upload a ZIP backup file.'
@@ -1014,8 +1039,13 @@ def restore_live_backup(path):
         with zipfile.ZipFile(path) as z:
             missing=[f'database/{t}.csv' for t in RESTORE_TABLES if f'database/{t}.csv' not in z.namelist()]
             if missing:
-                return 'This ZIP is not a live CRM backup. It is missing: '+', '.join(missing)
-            parsed={table:parse_backup_table(z,table) for table in RESTORE_TABLES}
+                parsed=parse_sqlite_backup_tables(z)
+                if parsed is None:
+                    return 'This ZIP is not a recognized CRM backup. It must contain live table CSV files or export_import_crm.sqlite.'
+                backup_kind='SQLite backup'
+            else:
+                parsed={table:parse_backup_table(z,table) for table in RESTORE_TABLES}
+                backup_kind='website backup'
         order=['buyers','email_templates','activities','campaigns','campaign_recipients']
         with conn() as c:
             for table in ['campaign_recipients','activities','campaigns','buyers','email_templates']:
@@ -1042,7 +1072,7 @@ def restore_live_backup(path):
             c.commit()
         init_db()
         total=sum(len(v) for v in parsed.values())
-        return f'Restore complete from website backup: {total} rows restored into live CRM tables.'
+        return f'Restore complete from {backup_kind}: {total} rows restored into live CRM tables.'
     except Exception as e:
         return 'Restore failed: '+str(e)
 
