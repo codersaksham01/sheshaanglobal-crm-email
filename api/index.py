@@ -55,6 +55,31 @@ def request_path(environ):
     return '/'
 
 
+def request_query_string(environ):
+    query_string = environ.get('QUERY_STRING', '')
+    if query_string:
+        return query_string
+    for candidate in (
+        environ.get('REQUEST_URI'),
+        environ.get('RAW_URI'),
+        environ.get('HTTP_X_ORIGINAL_URL'),
+        environ.get('HTTP_X_REWRITE_URL'),
+    ):
+        if candidate:
+            return urlsplit(candidate).query
+    return ''
+
+
+def safe_redirect_target(target):
+    target = target or '/'
+    parsed = urlsplit(target)
+    if parsed.scheme or parsed.netloc:
+        return '/'
+    if not target.startswith('/'):
+        return '/'
+    return target
+
+
 def application(environ, start_response):
     # 1. Extract Path, Method and Query Parameters
     path = request_path(environ)
@@ -65,7 +90,7 @@ def application(environ, start_response):
     if path != '/' and path.endswith('/'):
         path = path.rstrip('/')
     method = environ.get('REQUEST_METHOD', 'GET').upper()
-    query_string = environ.get('QUERY_STRING', '')
+    query_string = request_query_string(environ)
     params = parse_qs(query_string)
 
     # 2. Read POST Body
@@ -110,16 +135,35 @@ def application(environ, start_response):
 
     def login_page(message=''):
         notice = f'<div class="error">{crm_app.esc(message)}</div>' if message else ''
-        return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CRM Login</title><style>{crm_app.CSS}</style></head><body><main style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f7fb"><form method="post" action="/login" class="card" style="width:min(430px,100%);border-radius:18px"><h1 style="margin:0 0 8px;font-size:30px">Smart Export CRM</h1><p class="hint" style="margin-top:0">Sign in to continue.</p>{notice}<label>Email<input name="email" type="email" autocomplete="username" required autofocus></label><label style="display:block;margin-top:12px">Password<input name="password" type="password" autocomplete="current-password" required></label><button class="btn" type="submit" style="width:100%;margin-top:16px">Login</button></form></main></body></html>'''
+        next_target = safe_redirect_target(params.get('next', ['/'])[0])
+        action = '/login?next=' + quote(next_target)
+        return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CRM Login</title><style>{crm_app.CSS}</style></head><body><main style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f7fb"><form method="post" action="{action}" class="card" style="width:min(430px,100%);border-radius:18px"><h1 style="margin:0 0 8px;font-size:30px">Smart Export CRM</h1><p class="hint" style="margin-top:0">Sign in to continue.</p>{notice}<label>Email<input name="email" type="email" autocomplete="username" required autofocus></label><label style="display:block;margin-top:12px">Password<input name="password" type="password" autocomplete="current-password" required></label><button class="btn" type="submit" style="width:100%;margin-top:16px">Login</button></form></main></body></html>'''
 
     def expected_credentials():
-        return (
-            os.environ.get('CRM_USERNAME', 'info@sheshaanglobal.com'),
-            os.environ.get('CRM_PASSWORD', 'Sana@200908'),
-        )
+        users = []
+        raw_users = os.environ.get('CRM_USERS', '')
+        if raw_users:
+            for item in raw_users.replace('\n', ',').split(','):
+                if ':' not in item:
+                    continue
+                username, password = item.split(':', 1)
+                username = username.strip()
+                password = password.strip()
+                if username and password:
+                    users.append((username, password))
+        username = os.environ.get('CRM_USERNAME', 'info@sheshaanglobal.com')
+        password = os.environ.get('CRM_PASSWORD', 'Sana@200908')
+        if username and password:
+            users.append((username, password))
+        return users
 
     def session_token(username):
-        secret = os.environ.get('CRM_SESSION_SECRET') or expected_credentials()[1]
+        secret = os.environ.get('CRM_SESSION_SECRET')
+        if not secret:
+            for saved_username, saved_password in expected_credentials():
+                if hmac.compare_digest(saved_username, username):
+                    secret = saved_password
+                    break
         if not secret:
             return ''
         return hmac.new(secret.encode('utf-8'), username.encode('utf-8'), hashlib.sha256).hexdigest()
@@ -133,14 +177,18 @@ def application(environ, start_response):
         return ''
 
     def is_authenticated():
-        username, password = expected_credentials()
-        if not username or not password:
+        users = expected_credentials()
+        if not users:
             return False
         auth_header = environ.get('HTTP_AUTHORIZATION', '')
-        expected = "Basic " + base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("utf-8")
-        if hmac.compare_digest(auth_header, expected):
-            return True
-        return hmac.compare_digest(cookie_value('crm_session'), session_token(username))
+        cookie = cookie_value('crm_session')
+        for username, password in users:
+            expected = "Basic " + base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("utf-8")
+            if hmac.compare_digest(auth_header, expected):
+                return True
+            if cookie and hmac.compare_digest(cookie, session_token(username)):
+                return True
+        return False
 
     # Helper to check if HTTPS
     is_secure_request = (
@@ -153,12 +201,13 @@ def application(environ, start_response):
         return html_response(login_page())
     if path == '/login' and method == 'POST':
         data = form_dict(body_bytes)
-        username, password = expected_credentials()
-        if not username or not password:
-            return html_response(login_page('Login is not configured. Add CRM_USERNAME and CRM_PASSWORD in Vercel Environment Variables.'), '500 Internal Server Error')
-        if hmac.compare_digest(data.get('email', ''), username) and hmac.compare_digest(data.get('password', ''), password):
-            cookie = f"crm_session={session_token(username)}; Path=/; HttpOnly{secure_attr}; SameSite=Lax; Max-Age=604800"
-            return redirect_response('/', [('Set-Cookie', cookie)])
+        users = expected_credentials()
+        if not users:
+            return html_response(login_page('Login is not configured. Add CRM_USERNAME and CRM_PASSWORD, or CRM_USERS, in Vercel Environment Variables.'), '500 Internal Server Error')
+        for username, password in users:
+            if hmac.compare_digest(data.get('email', ''), username) and hmac.compare_digest(data.get('password', ''), password):
+                cookie = f"crm_session={session_token(username)}; Path=/; HttpOnly{secure_attr}; SameSite=Lax; Max-Age=604800"
+                return redirect_response(safe_redirect_target(params.get('next', ['/'])[0]), [('Set-Cookie', cookie)])
         return html_response(login_page('Invalid email or password.'), '401 Unauthorized')
     if path == '/logout':
         return redirect_response('/login', [('Set-Cookie', f'crm_session=; Path=/; HttpOnly{secure_attr}; SameSite=Lax; Max-Age=0')])

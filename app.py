@@ -352,6 +352,8 @@ class SQLiteConnWrapper:
 
 def conn():
     if not DATABASE_URL:
+        if SERVERLESS:
+            raise RuntimeError("Live database is not configured. Add DATABASE_URL, POSTGRES_URL, POSTGRES_URL_NON_POOLING, or SUPABASE_DB_URL in Vercel Environment Variables so all users share the same data.")
         raw_conn = sqlite3.connect(DB_PATH)
         return SQLiteConnWrapper(raw_conn)
     import ssl
