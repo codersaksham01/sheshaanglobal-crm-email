@@ -6,7 +6,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import xml.etree.ElementTree as ET
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-DATA_DIR = "/data" if os.environ.get("RENDER") else ("/tmp" if (os.environ.get("NETLIFY") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")) else BASE_DIR)
+SERVERLESS = os.environ.get("VERCEL") or os.environ.get("NETLIFY") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+DATA_DIR = "/data" if os.environ.get("RENDER") else ("/tmp" if SERVERLESS else BASE_DIR)
 
 DB_PATH = os.path.join(DATA_DIR, "export_import_crm.sqlite")
 UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
@@ -99,7 +100,13 @@ def norm_header(h): return re.sub(r"[^a-z0-9]+"," ",str(h).lower()).strip()
 import pg8000
 from urllib.parse import urlparse
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:sheshaanglobal@db.ttigvtswchtotyshikcv.supabase.co:5432/postgres")
+DATABASE_URL = (
+    os.environ.get("DATABASE_URL")
+    or os.environ.get("POSTGRES_URL")
+    or os.environ.get("POSTGRES_URL_NON_POOLING")
+    or os.environ.get("SUPABASE_DB_URL")
+    or ""
+)
 
 def parse_pg_url(url):
     parsed = urlparse(url)
@@ -267,6 +274,8 @@ class PostgresConnWrapper:
 
 def conn():
     import ssl
+    if not DATABASE_URL:
+        raise RuntimeError("Database connection is not set. Add DATABASE_URL or POSTGRES_URL in Vercel Environment Variables.")
     kwargs = parse_pg_url(DATABASE_URL)
     try:
         ssl_context = ssl.create_default_context()
@@ -686,7 +695,8 @@ def campaign_detail_page(cid,msg=''):
         mid=f'msg{r["id"]}'
         mail = outlook_compose_url({'recipient_id':[str(r['id'])]})
         t_mail = titan_compose_url({'recipient_id':[str(r['id'])]})
-        trs.append(f'<tr><td><input class="big-checkbox" type="checkbox" name="recipient_ids" value="{r["id"]}"></td><td><strong>{esc(r["company_name"])}</strong><br><span class="mini">{esc(r["contact_person"])} · {esc(r["email"])}</span><br>{"<span class=pill>Pending</span>" if not r["sent"] else "<span class=\"pill green\">Sent</span>"}</td><td>{esc(r["country"])}<br><span class="mini">{esc(r["product"])}</span></td><td><strong>{esc(r["subject_snapshot"])}</strong><details><summary class="mini">Preview message</summary><div id="{mid}" class="template-box" style="margin-top:8px">{esc(r["body_snapshot"])}</div><button class="btn small secondary" type="button" onclick="copyText(\'{mid}\')">Copy Message</button></details></td><td><a class="btn small secondary" href="{esc(mail)}" style="margin-bottom:4px;display:block;text-align:center">Outlook</a><a class="btn small ghost" href="{esc(t_mail)}" style="display:block;text-align:center">Titan</a><br><span class="mini">Sent on: {esc(r["sent_on"] or "-")}</span></td></tr>')
+        status_badge = '<span class=pill>Pending</span>' if not r["sent"] else '<span class="pill green">Sent</span>'
+        trs.append(f'<tr><td><input class="big-checkbox" type="checkbox" name="recipient_ids" value="{r["id"]}"></td><td><strong>{esc(r["company_name"])}</strong><br><span class="mini">{esc(r["contact_person"])} - {esc(r["email"])}</span><br>{status_badge}</td><td>{esc(r["country"])}<br><span class="mini">{esc(r["product"])}</span></td><td><strong>{esc(r["subject_snapshot"])}</strong><details><summary class="mini">Preview message</summary><div id="{mid}" class="template-box" style="margin-top:8px">{esc(r["body_snapshot"])}</div><button class="btn small secondary" type="button" onclick="copyText(\'{mid}\')">Copy Message</button></details></td><td><a class="btn small secondary" href="{esc(mail)}" style="margin-bottom:4px;display:block;text-align:center">Outlook</a><a class="btn small ghost" href="{esc(t_mail)}" style="display:block;text-align:center">Titan</a><br><span class="mini">Sent on: {esc(r["sent_on"] or "-")}</span></td></tr>')
     body=top('Campaign: '+camp['name'],f'Template: {camp["template_name"] or "-"} · Recipients: {len(recs)} · Sent: {sent} · {camp["segment_note"] or ""}','<a class="btn secondary" href="/campaigns">Campaigns</a>')+notice+f'<div class="grid stats"><div class="card stat"><div class="label">Recipients</div><div class="num">{len(recs)}</div></div><div class="card stat good"><div class="label">Sent</div><div class="num">{sent}</div></div><div class="card stat warn"><div class="label">Pending</div><div class="num">{len(recs)-sent}</div></div><div class="card stat blue"><div class="label">Campaign ID</div><div class="num">#{cid}</div></div></div><form method="post" action="/campaign/{cid}/mark-sent"><div class="card" style="margin-bottom:12px"><div class="form-grid"><label>Activity Date<input type="date" name="activity_date" value="{today()}"></label><label>Next Follow-up<input type="date" name="next_followup_date" value="{(date.today()+timedelta(days=3)).isoformat()}"></label><label class="full">Notes<textarea name="notes" placeholder="Campaign email sent from Outlook desktop app"></textarea></label></div><button class="btn" type="submit">Mark Selected Sent</button> <button class="btn secondary" name="mark_all_pending" value="1" type="submit">Mark All Pending Sent</button></div><div class="table-wrap"><table><tr><th>Select<br><input class="big-checkbox" type="checkbox" onclick="document.querySelectorAll(\'input[name=recipient_ids]\').forEach(cb=>cb.checked=this.checked)"></th><th>Buyer</th><th>Segment</th><th>Personalized Email</th><th>Action</th></tr>{"".join(trs) or "<tr><td colspan=5>No recipients</td></tr>"}</table></div></form>'
     return layout('Campaign Detail',body,'campaigns')
 
