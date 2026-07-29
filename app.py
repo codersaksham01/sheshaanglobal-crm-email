@@ -969,6 +969,13 @@ def buyer_rows(valid_only=False, followups=False):
         rows.append([b['id'],b['company_name'],b['contact_person'],b['email'],b['phone'],b['website'],b['country'],b['market_category'],b['product'],b['product_category'],b['buyer_type'],b['source'],b['email_status'],b['priority'],b['stage'],lead_score(b),next_action(b),b['first_email_sent_on'],b['last_email_sent_on'],'Yes' if b['response_received'] else 'No',b['response_date'],'Yes' if b['followup1_done'] else 'No',b['followup1_date'],'Yes' if b['followup2_done'] else 'No',b['followup2_date'],'Yes' if b['followup3_done'] else 'No',b['followup3_date'],b['next_followup_date'],b['notes'],b['created_at'],b['updated_at']])
     return rows
 
+def table_export(name, order='id'):
+    with conn() as c:
+        rows=c.execute(f'SELECT * FROM {name} ORDER BY {order}').fetchall()
+    headers=list(rows[0].keys()) if rows else []
+    data=[[r[h] for h in headers] for r in rows]
+    return headers,data
+
 def make_pdf(title, lines):
     objs=[]
     def add(o): objs.append(o); return len(objs)
@@ -996,19 +1003,29 @@ def report_pdf():
 def backup_zip():
     bio=io.BytesIO()
     with zipfile.ZipFile(bio,'w',zipfile.ZIP_DEFLATED) as z:
-        if os.path.exists(DB_PATH): z.write(DB_PATH,'export_import_crm.sqlite')
+        if not DATABASE_URL and os.path.exists(DB_PATH):
+            z.write(DB_PATH,'export_import_crm.sqlite')
         z.writestr('exports/export_import_buyers.csv', csv_bytes(EXPORT_HEADERS,buyer_rows()))
         z.writestr('exports/valid_leads.csv', csv_bytes(EXPORT_HEADERS,buyer_rows(valid_only=True)))
+        z.writestr('exports/followup_tasks.csv', csv_bytes(EXPORT_HEADERS,buyer_rows(followups=True)))
+        for table in ['buyers','activities','email_templates','campaigns','campaign_recipients']:
+            headers,rows=table_export(table)
+            z.writestr(f'database/{table}.csv', csv_bytes(headers,rows))
         z.writestr('reports/export_import_crm_report.pdf', report_pdf())
-        z.writestr('README_BACKUP.txt','Smart Export CRM V7 backup: includes SQLite database, exports, report, templates and campaigns. Restore using Backup & Restore page.')
+        z.writestr('README_BACKUP.txt','Smart Export CRM V7 backup. On Vercel/Supabase this ZIP contains live table CSV exports, buyer exports, valid leads, follow-up tasks, and PDF report. Local desktop backups may also include export_import_crm.sqlite.')
     return bio.getvalue()
 
 def backup_restore_page(msg=''):
     notice=f'<div class="success">{esc(msg)}</div>' if msg else ''
-    body=top('Backup & Restore','Download backup ZIP or restore previous SQLite CRM database safely.','<a class="btn" href="/backup.zip">Download Backup ZIP</a>')+notice+f'<div class="grid two"><div class="card"><h3>Backup</h3><p class="hint">Backup includes database, buyer CSV, valid leads CSV and PDF report.</p><a class="btn" href="/backup.zip">Download Backup ZIP</a></div><div class="card"><h3>Restore</h3><form method="post" action="/restore" enctype="multipart/form-data"><label>Backup ZIP<input type="file" name="file" accept=".zip" required></label><button class="btn danger" onclick="return confirm(\'This will replace current database after a safety copy. Continue?\')">Restore Backup</button></form><p class="hint">A safety copy is saved inside backups folder before restore.</p></div></div>'
+    restore_block="<div class=\"card\"><h3>Restore</h3><form method=\"post\" action=\"/restore\" enctype=\"multipart/form-data\"><label>Backup ZIP<input type=\"file\" name=\"file\" accept=\".zip\" required></label><button class=\"btn danger\" onclick=\"return confirm('This will replace current local SQLite database after a safety copy. Continue?')\">Restore Backup</button></form><p class=\"hint\">Restore is available for the local desktop SQLite app.</p></div>"
+    if DATABASE_URL:
+        restore_block='<div class="card warn"><h3>Restore</h3><p class="hint">This live Vercel app uses Supabase/Postgres. Download backups are supported here. Restore must be done from Supabase using CSV/table tools to avoid overwriting live data by accident.</p></div>'
+    body=top('Backup & Restore','Download a ZIP backup generated from the current live CRM data.','<a class="btn" href="/backup.zip">Download Backup ZIP</a>')+notice+f'<div class="grid two"><div class="card"><h3>Backup</h3><p class="hint">Backup includes live table CSV exports, buyer CSV, valid leads CSV, follow-up tasks and PDF report.</p><a class="btn" href="/backup.zip">Download Backup ZIP</a></div>{restore_block}</div>'
     return layout('Backup Restore',body,'backup')
 
 def restore_backup(path):
+    if DATABASE_URL:
+        return 'Restore is disabled on the live Supabase/Postgres app. Use the downloaded CSV files with Supabase import tools, or restore only in the local desktop SQLite app.'
     if not path or not path.lower().endswith('.zip'): return 'Please upload a ZIP backup file.'
     try:
         with zipfile.ZipFile(path) as z:
