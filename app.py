@@ -976,6 +976,76 @@ def table_export(name, order='id'):
     data=[[r[h] for h in headers] for r in rows]
     return headers,data
 
+RESTORE_TABLES = {
+    'buyers': {
+        'cols': ['id','company_name','contact_person','email','phone','website','country','market_category','product','product_category','buyer_type','source','email_status','priority','stage','first_email_sent_on','last_email_sent_on','response_received','response_date','followup1_done','followup1_date','followup2_done','followup2_date','followup3_done','followup3_date','next_followup_date','notes','created_at','updated_at'],
+        'ints': {'id','response_received','followup1_done','followup2_done','followup3_done'},
+    },
+    'activities': {
+        'cols': ['id','buyer_id','activity_type','activity_date','notes','created_at'],
+        'ints': {'id','buyer_id'},
+    },
+    'email_templates': {
+        'cols': ['id','name','subject','body','category','is_default','created_at','updated_at'],
+        'ints': {'id','is_default'},
+    },
+    'campaigns': {
+        'cols': ['id','name','template_id','segment_note','created_at','updated_at'],
+        'ints': {'id','template_id'},
+    },
+    'campaign_recipients': {
+        'cols': ['id','campaign_id','buyer_id','email','subject_snapshot','body_snapshot','sent','sent_on','reply_received','reply_on','notes','created_at'],
+        'ints': {'id','campaign_id','buyer_id','sent','reply_received'},
+    },
+}
+
+def parse_backup_table(z, table):
+    filename=f'database/{table}.csv'
+    if filename not in z.namelist():
+        return []
+    with z.open(filename) as f:
+        text=io.TextIOWrapper(f, encoding='utf-8-sig', newline='')
+        return [{clean(k):clean(v) for k,v in row.items()} for row in csv.DictReader(text)]
+
+def restore_live_backup(path):
+    if not path or not path.lower().endswith('.zip'):
+        return 'Please upload a ZIP backup file.'
+    try:
+        with zipfile.ZipFile(path) as z:
+            missing=[f'database/{t}.csv' for t in RESTORE_TABLES if f'database/{t}.csv' not in z.namelist()]
+            if missing:
+                return 'This ZIP is not a live CRM backup. It is missing: '+', '.join(missing)
+            parsed={table:parse_backup_table(z,table) for table in RESTORE_TABLES}
+        order=['buyers','email_templates','activities','campaigns','campaign_recipients']
+        with conn() as c:
+            for table in ['campaign_recipients','activities','campaigns','buyers','email_templates']:
+                c.execute(f'DELETE FROM {table}')
+            for table in order:
+                spec=RESTORE_TABLES[table]
+                cols=spec['cols']
+                placeholders=','.join('?' for _ in cols)
+                for row in parsed[table]:
+                    values=[]
+                    for col in cols:
+                        val=row.get(col,'')
+                        if col in spec['ints']:
+                            values.append(int(val) if val not in ('',None) else None)
+                        else:
+                            values.append(val)
+                    c.execute(f"INSERT INTO {table}({','.join(cols)}) VALUES({placeholders})",values)
+            if DATABASE_URL:
+                for table in RESTORE_TABLES:
+                    try:
+                        c.execute(f"SELECT setval(pg_get_serial_sequence('{table}','id'), COALESCE((SELECT MAX(id) FROM {table}), 1), (SELECT MAX(id) FROM {table}) IS NOT NULL)")
+                    except Exception:
+                        pass
+            c.commit()
+        init_db()
+        total=sum(len(v) for v in parsed.values())
+        return f'Restore complete from website backup: {total} rows restored into live CRM tables.'
+    except Exception as e:
+        return 'Restore failed: '+str(e)
+
 def make_pdf(title, lines):
     objs=[]
     def add(o): objs.append(o); return len(objs)
@@ -1019,13 +1089,13 @@ def backup_restore_page(msg=''):
     notice=f'<div class="success">{esc(msg)}</div>' if msg else ''
     restore_block="<div class=\"card\"><h3>Restore</h3><form method=\"post\" action=\"/restore\" enctype=\"multipart/form-data\"><label>Backup ZIP<input type=\"file\" name=\"file\" accept=\".zip\" required></label><button class=\"btn danger\" onclick=\"return confirm('This will replace current local SQLite database after a safety copy. Continue?')\">Restore Backup</button></form><p class=\"hint\">Restore is available for the local desktop SQLite app.</p></div>"
     if DATABASE_URL:
-        restore_block='<div class="card warn"><h3>Restore</h3><p class="hint">This live Vercel app uses Supabase/Postgres. Download backups are supported here. Restore must be done from Supabase using CSV/table tools to avoid overwriting live data by accident.</p></div>'
+        restore_block="<div class=\"card warn\"><h3>Restore Live CRM</h3><form method=\"post\" action=\"/restore\" enctype=\"multipart/form-data\"><label>CRM Backup ZIP<input type=\"file\" name=\"file\" accept=\".zip\" required></label><button class=\"btn danger\" onclick=\"return confirm('This will replace the live CRM data with the uploaded backup. Continue?')\">Restore Backup</button></form><p class=\"hint\">Upload a ZIP downloaded from this CRM backup page. The website will restore buyers, templates, activities, campaigns and recipients into Supabase/Postgres.</p></div>"
     body=top('Backup & Restore','Download a ZIP backup generated from the current live CRM data.','<a class="btn" href="/backup.zip">Download Backup ZIP</a>')+notice+f'<div class="grid two"><div class="card"><h3>Backup</h3><p class="hint">Backup includes live table CSV exports, buyer CSV, valid leads CSV, follow-up tasks and PDF report.</p><a class="btn" href="/backup.zip">Download Backup ZIP</a></div>{restore_block}</div>'
     return layout('Backup Restore',body,'backup')
 
 def restore_backup(path):
     if DATABASE_URL:
-        return 'Restore is disabled on the live Supabase/Postgres app. Use the downloaded CSV files with Supabase import tools, or restore only in the local desktop SQLite app.'
+        return restore_live_backup(path)
     if not path or not path.lower().endswith('.zip'): return 'Please upload a ZIP backup file.'
     try:
         with zipfile.ZipFile(path) as z:
