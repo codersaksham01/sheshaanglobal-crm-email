@@ -34,6 +34,12 @@ def parse_multipart_payload(content_type, body_bytes):
     return None, None
 
 def request_path(environ):
+    routed_path = parse_qs(request_query_string(environ), keep_blank_values=True).get('__path', [''])[0]
+    if routed_path:
+        path = '/' + routed_path.lstrip('/')
+        if path != '/' and path.endswith('/'):
+            path = path.rstrip('/')
+        return path
     candidates = [
         environ.get('REQUEST_URI'),
         environ.get('RAW_URI'),
@@ -92,6 +98,7 @@ def application(environ, start_response):
     method = environ.get('REQUEST_METHOD', 'GET').upper()
     query_string = request_query_string(environ)
     params = parse_qs(query_string)
+    params.pop('__path', None)
 
     # 2. Read POST Body
     try:

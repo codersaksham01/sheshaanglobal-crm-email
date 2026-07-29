@@ -103,7 +103,11 @@ DATABASE_URL = (
     os.environ.get("DATABASE_URL")
     or os.environ.get("POSTGRES_URL")
     or os.environ.get("POSTGRES_URL_NON_POOLING")
+    or os.environ.get("POSTGRES_PRISMA_URL")
+    or os.environ.get("POSTGRES_URL_NO_SSL")
     or os.environ.get("SUPABASE_DB_URL")
+    or os.environ.get("SUPABASE_DATABASE_URL")
+    or os.environ.get("SUPABASE_POSTGRES_URL")
     or ""
 )
 
@@ -353,7 +357,7 @@ class SQLiteConnWrapper:
 def conn():
     if not DATABASE_URL:
         if SERVERLESS:
-            raise RuntimeError("Live database is not configured. Add DATABASE_URL, POSTGRES_URL, POSTGRES_URL_NON_POOLING, or SUPABASE_DB_URL in Vercel Environment Variables so all users share the same data.")
+            raise RuntimeError("Live database is not configured. Add DATABASE_URL, POSTGRES_URL, POSTGRES_URL_NON_POOLING, POSTGRES_PRISMA_URL, SUPABASE_DB_URL, SUPABASE_DATABASE_URL, or SUPABASE_POSTGRES_URL in Vercel Environment Variables so all users share the same data.")
         raw_conn = sqlite3.connect(DB_PATH)
         return SQLiteConnWrapper(raw_conn)
     import ssl
