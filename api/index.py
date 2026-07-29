@@ -3,7 +3,9 @@ import re
 import sys
 import base64
 import email
-from urllib.parse import parse_qs, urlparse
+import hmac
+import hashlib
+from urllib.parse import parse_qs, quote
 
 # Add root folder to Python path
 sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
@@ -32,23 +34,17 @@ def parse_multipart_payload(content_type, body_bytes):
     return None, None
 
 def application(environ, start_response):
-    # 1. Enforce Basic Auth
-    auth_header = environ.get('HTTP_AUTHORIZATION')
-    expected = "Basic " + base64.b64encode(b"info@sheshaanglobal.com:Sana@200908").decode("utf-8")
-    if auth_header != expected:
-        start_response('401 Unauthorized', [
-            ('Content-Type', 'text/html'),
-            ('WWW-Authenticate', 'Basic realm="CRM Login"')
-        ])
-        return [b"Unauthorized. Please login with your credentials."]
-
-    # 2. Extract Path, Method and Query Parameters
+    # 1. Extract Path, Method and Query Parameters
     path = environ.get('PATH_INFO', '/')
+    if path == '/api/index.py':
+        path = '/'
+    elif path.startswith('/api/index.py/'):
+        path = path[len('/api/index.py'):]
     method = environ.get('REQUEST_METHOD', 'GET').upper()
     query_string = environ.get('QUERY_STRING', '')
     params = parse_qs(query_string)
 
-    # 3. Read POST Body
+    # 2. Read POST Body
     try:
         content_length = int(environ.get('CONTENT_LENGTH', 0))
     except ValueError:
@@ -70,11 +66,14 @@ def application(environ, start_response):
         ])
         return [data]
 
-    def redirect_response(location):
-        start_response('303 See Other', [
+    def redirect_response(location, extra_headers=None):
+        headers = [
             ('Location', location),
             ('Content-Length', '0')
-        ])
+        ]
+        if extra_headers:
+            headers.extend(extra_headers)
+        start_response('303 See Other', headers)
         return [b'']
 
     def binary_response(filename, data, content_type):
@@ -84,6 +83,51 @@ def application(environ, start_response):
             ('Content-Length', str(len(data)))
         ])
         return [data]
+
+    def login_page(message=''):
+        notice = f'<div class="error">{crm_app.esc(message)}</div>' if message else ''
+        return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CRM Login</title><style>{crm_app.CSS}</style></head><body><main style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#f4f7fb"><form method="post" action="/login" class="card" style="width:min(430px,100%);border-radius:18px"><h1 style="margin:0 0 8px;font-size:30px">Smart Export CRM</h1><p class="hint" style="margin-top:0">Sign in to continue.</p>{notice}<label>Email<input name="email" type="email" autocomplete="username" required autofocus></label><label style="display:block;margin-top:12px">Password<input name="password" type="password" autocomplete="current-password" required></label><button class="btn" type="submit" style="width:100%;margin-top:16px">Login</button></form></main></body></html>'''
+
+    def expected_credentials():
+        return (
+            os.environ.get('CRM_USERNAME', 'info@sheshaanglobal.com'),
+            os.environ.get('CRM_PASSWORD', 'Sana@200908'),
+        )
+
+    def session_token(username):
+        secret = os.environ.get('CRM_SESSION_SECRET') or expected_credentials()[1]
+        return hmac.new(secret.encode('utf-8'), username.encode('utf-8'), hashlib.sha256).hexdigest()
+
+    def cookie_value(name):
+        for item in environ.get('HTTP_COOKIE', '').split(';'):
+            if '=' in item:
+                key, value = item.strip().split('=', 1)
+                if key == name:
+                    return value
+        return ''
+
+    def is_authenticated():
+        username, password = expected_credentials()
+        auth_header = environ.get('HTTP_AUTHORIZATION', '')
+        expected = "Basic " + base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("utf-8")
+        if hmac.compare_digest(auth_header, expected):
+            return True
+        return hmac.compare_digest(cookie_value('crm_session'), session_token(username))
+
+    if path == '/login' and method == 'GET':
+        return html_response(login_page())
+    if path == '/login' and method == 'POST':
+        data = form_dict(body_bytes)
+        username, password = expected_credentials()
+        if hmac.compare_digest(data.get('email', ''), username) and hmac.compare_digest(data.get('password', ''), password):
+            cookie = f"crm_session={session_token(username)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=604800"
+            return redirect_response('/', [('Set-Cookie', cookie)])
+        return html_response(login_page('Invalid email or password.'), '401 Unauthorized')
+    if path == '/logout':
+        return redirect_response('/login', [('Set-Cookie', 'crm_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0')])
+
+    if not is_authenticated():
+        return redirect_response('/login?next=' + quote(path or '/'))
 
     try:
         ensure_db()
