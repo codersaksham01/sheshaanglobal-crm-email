@@ -5,6 +5,7 @@ import base64
 import email
 import hmac
 import hashlib
+import tempfile
 from urllib.parse import parse_qs, quote, urlsplit
 
 # Add root folder to Python path
@@ -22,13 +23,43 @@ def ensure_db():
 
 def parse_multipart_payload(content_type, body_bytes):
     try:
+        if 'multipart/form-data' in content_type:
+            match = re.search(r'boundary=(?:"([^"]+)"|([^;]+))', content_type)
+            if match:
+                boundary = (match.group(1) or match.group(2)).encode('utf-8')
+                for part in body_bytes.split(b'--' + boundary):
+                    part = part.strip(b'\r\n')
+                    if not part or part == b'--':
+                        continue
+                    if b'\r\n\r\n' in part:
+                        raw_headers, payload = part.split(b'\r\n\r\n', 1)
+                    elif b'\n\n' in part:
+                        raw_headers, payload = part.split(b'\n\n', 1)
+                    else:
+                        continue
+                    headers = raw_headers.decode('utf-8', errors='ignore')
+                    if 'name="file"' not in headers:
+                        continue
+                    filename_match = re.search(r'filename="([^"]*)"', headers)
+                    if not filename_match or not filename_match.group(1):
+                        return None, None
+                    filename = os.path.basename(filename_match.group(1)).replace(' ', '_')
+                    if payload.endswith(b'\r\n'):
+                        payload = payload[:-2]
+                    elif payload.endswith(b'\n'):
+                        payload = payload[:-1]
+                    return payload, filename
+    except Exception:
+        pass
+    try:
         msg_input = b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + body_bytes
         msg = email.message_from_bytes(msg_input)
         for part in msg.walk():
             if part.get_content_disposition() == 'form-data' and part.get_param('name') == 'file':
-                filename = part.get_filename()
+                filename = os.path.basename(part.get_filename() or '').replace(' ', '_')
                 file_payload = part.get_payload(decode=True)
-                return file_payload, filename
+                if filename:
+                    return file_payload, filename
     except Exception:
         pass
     return None, None
@@ -102,10 +133,13 @@ def application(environ, start_response):
 
     # 2. Read POST Body
     try:
-        content_length = int(environ.get('CONTENT_LENGTH', 0))
+        content_length = int(environ.get('CONTENT_LENGTH') or 0)
     except ValueError:
         content_length = 0
-    body_bytes = environ['wsgi.input'].read(content_length)
+    if content_length:
+        body_bytes = environ['wsgi.input'].read(content_length)
+    else:
+        body_bytes = environ['wsgi.input'].read()
 
     def form_params(body):
         return parse_qs(body.decode('utf-8', errors='ignore'), keep_blank_values=True)
@@ -348,8 +382,8 @@ def application(environ, start_response):
                 content_type = environ.get('CONTENT_TYPE', '')
                 file_payload, filename = parse_multipart_payload(content_type, body_bytes)
                 if not file_payload:
-                    return html_response(crm_app.import_page('No file received.'))
-                save_path = os.path.join("/tmp", filename)
+                    return html_response(crm_app.import_page('Please choose a CSV or XLSX file before clicking Import Data.'))
+                save_path = os.path.join(tempfile.gettempdir(), filename)
                 with open(save_path, 'wb') as f:
                     f.write(file_payload)
                 if filename.lower().endswith('.csv'):
@@ -365,8 +399,8 @@ def application(environ, start_response):
                 content_type = environ.get('CONTENT_TYPE', '')
                 file_payload, filename = parse_multipart_payload(content_type, body_bytes)
                 if not file_payload:
-                    return html_response(crm_app.backup_restore_page('No file received.'))
-                save_path = os.path.join("/tmp", filename)
+                    return html_response(crm_app.backup_restore_page('Please choose a CRM Backup ZIP file before clicking Restore Backup.'))
+                save_path = os.path.join(tempfile.gettempdir(), filename)
                 with open(save_path, 'wb') as f:
                     f.write(file_payload)
                 msg = crm_app.restore_backup(save_path)
